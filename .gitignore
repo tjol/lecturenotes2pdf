@@ -3,3 +3,6 @@
 *.pyo
 *~
 *.sublime-*
+/build
+/dist
+*.egg-info
