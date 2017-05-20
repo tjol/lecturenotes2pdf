@@ -28,6 +28,7 @@ This tool is **not complete**, but it should work for many notebooks. Notably:
  - Page background patterns are not supported
  - Changing a notebook's default font (to something other than *sans-serif*)
    has no effect. (Font changes *within* a notebook are used)
+ - Underlined text is not underlined
 
 ## Requirements
 
