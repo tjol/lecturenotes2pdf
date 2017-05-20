@@ -8,8 +8,8 @@ import argparse
 import logging
 import sys
 
-from lecturenotes2pdf.notebook import Notebook, NotebooksBoard
-from lecturenotes2pdf.pdf import notebook2pdf
+from .notebook import Notebook, NotebooksBoard
+from .pdf import notebook2pdf
 
 
 def list_board(board):

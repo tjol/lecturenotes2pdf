@@ -5,10 +5,12 @@ Interface to LectureNotes notebooks
 """
 
 from collections import namedtuple
+import logging
 import os
 import os.path
 import xml.etree.ElementTree as ET
 
+_log = logging.getLogger(__name__)
 
 class NotebooksBoard(object):
     def __init__(self, path):
@@ -131,7 +133,7 @@ class Page(object):
         # Collect text layer and boxes
         textpath_base = os.path.join(self.root, 'text{}'.format(self.number))
         if os.path.exists(textpath_base + '.txt'):
-            self.text = Text(textpath_base)
+            self.text = Text(self, textpath_base)
         else:
             self.text = None
 
@@ -140,7 +142,7 @@ class Page(object):
         while True:
             box_base = '{}_{}'.format(textpath_base, i)
             if os.path.exists(box_base + '.txt'):
-                self.text_boxes.append(box_base)
+                self.text_boxes.append(Text(self, box_base))
                 i += 1
             else:
                 break
@@ -154,7 +156,9 @@ class Page(object):
             self.keywords = []
 
 class Text(object):
-    def __init__(self, filename_base):
+    def __init__(self, page, filename_base):
+        self.page = page
+
         txt_file = filename_base + '.txt'
         box_file = filename_base + '.box'
         style_file = filename_base + '.style'
@@ -191,11 +195,202 @@ TextStyleCommand = namedtuple('TextStyleCommand',
                                'from_index', 'to_index',
                                'unknown1'])
 
+BOLD = 0b01
+ITALIC = 0b10
+
+class TextingMachine(object):
+    """
+    Base class providing support for rendering Text objects.
+
+    This reads through the text and style and calls a number of methods
+    to add plain text or change style.
+
+    Subclasses must implement these methods:
+
+     - set_bold
+     - set_italic
+     - set_underline
+     - set_color
+     - set_size
+     - set_typeface
+     - translate
+     - goto
+     - write_text
+    """
+
+    def __init__(self, text):
+        self.text = text
+
+        self._style = -1
+
+
+    def run(self):
+        current_idx = 0
+        for new_idx, method, args in self._internal_command_queue():
+            if new_idx > current_idx:
+                s = self.text.content[current_idx:new_idx]
+                _log.debug('calling write_text ({})'.format(repr(s)))
+                self.write_text(s)
+                current_idx = new_idx
+            _log.debug('Calling {} {}'.format(method.__name__, args))
+            method(*args)
+
+        if current_idx < len(self.text.content):
+            self.write_text(self.text.content[current_idx:])
+
+
+    def _internal_command_queue(self):
+        """
+        Convert the LectureNotes command queue into something we can use.
+
+        Basically, this method takes all the instructions (which have start and
+        end points), and turns them into do and undo instructions which run()
+        then executes in order.
+        """
+        # Create a list of commands (index, callable, args)
+        q = []
+
+        nb = self.text.page.notebook
+
+        # Use the default text formats
+        style = nb.text_font_style
+        # No idea why, but it appears that the font size is off by a factor of
+        # 4/3.
+        pixelsize = nb.text_font_size * 3 / 4.0
+        underline = False
+        color = nb.text_font_color
+        # This should be taken from config! TODO
+        typeface = 'sans-serif'
+
+        # Setup commands - will prepend them to the final queue!
+        q.append((0, self._set_style, (style,)))
+        q.append((0, self.set_size, (pixelsize,)))
+        q.append((0, self.set_color, color))
+        q.append((0, self.set_typeface, (typeface,)))
+        if hasattr(self.text, 'x'):
+            q.append((0, self.goto, (self.text.x, self.text.y)))
+        else:
+            q.append((0, self.goto, (nb.text_margin_left,
+                                     nb.text_margin_top)))
+
+        style_commands = self.text.style or []
+        style_commands = style_commands[:]
+
+        def insert_command(index, command, arg):
+            """
+            add undo command to the script
+            """
+            if index < 0:
+                return
+            cmd_tuple = (command, arg, index, -1, None)
+            for i in range(len(style_commands)):
+                cmd, arg, from_idx, to_idx, foo = style_commands[i]
+                if from_idx >= index:
+                    style_commands.insert(i, cmd_tuple)
+                    break
+            else:
+                style_commands.append(cmd_tuple)
+
+        for cmd, arg, from_idx, to_idx, foo in style_commands:
+            if cmd == 'typeface':
+                q.append((from_idx, self.set_typeface, (arg,)))
+                insert_command(to_idx, 'typeface', typeface)
+                typeface = arg
+            elif cmd == 'styleset':
+                q.append((from_idx, self._set_style, (int(arg),)))
+                insert_command(to_idx, 'styleset', style)
+                style = int(arg)
+            elif cmd == 'stylexor':
+                stylebits = int(arg)
+                q.append((from_idx, self._set_style, (style ^ stylebits,)))
+                insert_command(to_idx, 'stylexor', arg)
+                style ^= stylebits
+            elif cmd == 'underline':
+                q.append((from_idx, self.set_underline, (True,)))
+                insert_command(to_idx, 'UNDO underline', None)
+                underline = True
+            elif cmd == 'UNDO underline':
+                q.append((from_idx, self.set_underline, (False,)))
+                underline = False
+            elif cmd == 'underlinexor':
+                bit = bool(int(arg))
+                q.append((from_idx, self.set_underline, (underline ^ bit,)))
+                insert_command(to_idx, 'underlinexor', arg)
+                underline ^= bit
+            elif cmd == 'foregroundcolor':
+                q.append((from_idx, self.set_color, parse_color(arg)))
+                insert_command(to_idx, 'foregroundcolor', color)
+                color = parse_color(arg)
+            elif cmd == 'relativesize':
+                newsize = pixelsize * float(arg)
+                q.append((from_idx, self.set_size, (newsize,)))
+                insert_command(to_idx, 'relativesize', 1 / float(arg))
+                pixelsize = newsize
+            elif cmd == 'subscript':
+                dy = 0.5 * pixelsize
+                q.append((from_idx, self.translate, (0, dy)))
+                insert_command(to_idx, 'superscript', None)
+            elif cmd == 'superscript':
+                dy = - 0.5 * pixelsize
+                q.append((from_idx, self.translate, (0, dy)))
+                insert_command(to_idx, 'subscript', None)
+            else:
+                raise ValueError('Unknown style command {}'.format(cmd))
+
+        return q
+
+
+    def _set_style(self, style):
+        if self._style < 0:
+            # initial set
+            self._style = style
+            self.set_bold((style & BOLD) != 0)
+            self.set_italic((style & ITALIC) != 0)
+        else:
+            change = self._style ^ style
+            if (change & BOLD) != 0:
+                self.set_bold((style & BOLD) != 0)
+            if (change & ITALIC) != 0:
+                self.set_italic((style & ITALIC) != 0)
+
+            self._style = style
+
+    def set_bold(self, bold):
+        raise NotImplementedError
+
+    def set_italic(self, italic):
+        raise NotImplementedError
+
+    def set_underline(self, underline):
+        raise NotImplementedError
+
+    def set_color(self, r, g, b):
+        raise NotImplementedError
+
+    def set_size(self, pixelsize):
+        raise NotImplementedError
+
+    def set_typeface(self, typeface):
+        raise NotImplementedError
+
+    def translate(self, px_x, px_y):
+        raise NotImplementedError
+
+    def goto(self, rel_x, rel_y):
+        raise NotImplementedError
+
+    def write_text(self, s):
+        raise NotImplementedError
+
+
 def parse_color(ln_color):
     """
     Take the int32 represetation of a color and turn it into an
     (r,g,b) tuple of floats
     """
+    if isinstance(ln_color, tuple) and len(ln_color) == 3:
+        return ln_color
+
     ARGB_long = (int(ln_color) + (1 << 32)) & 0xffffffff
 
     B = (ARGB_long >> 0) & 0xff
