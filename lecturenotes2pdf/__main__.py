@@ -38,51 +38,56 @@ def convert_board(board, verbosity):
         convert_notebook(nb, verbosity)
 
 
-arg_parser = argparse.ArgumentParser('lecturenotes2pdf')
-arg_parser.add_argument('location', help='location of LectureNotes data')
-arg_parser.add_argument('-l', '--list', action='store_true',
-                        help='list all notebooks and pages')
-arg_parser.add_argument('-v', '--verbose', action='count',
-                        help='say what is being done (also: -vv, -vvv)')
+def main():
+    arg_parser = argparse.ArgumentParser('lecturenotes2pdf')
+    arg_parser.add_argument('location', help='location of LectureNotes data')
+    arg_parser.add_argument('-l', '--list', action='store_true',
+                            help='list all notebooks and pages')
+    arg_parser.add_argument('-v', '--verbose', action='count',
+                            help='say what is being done (also: -vv, -vvv)')
 
-args = arg_parser.parse_args()
+    args = arg_parser.parse_args()
 
-logger = logging.getLogger('lecturenotes2pdf')
-# create console handler and set level to debug
-ch = logging.StreamHandler()
-# create formatter
-formatter = logging.Formatter('[%(levelname)s] %(name)s - %(message)s')
-# add formatter to ch
-ch.setFormatter(formatter)
-# add ch to logger
-logger.addHandler(ch)
+    logger = logging.getLogger('lecturenotes2pdf')
+    # create console handler and set level to debug
+    ch = logging.StreamHandler()
+    # create formatter
+    formatter = logging.Formatter('[%(levelname)s] %(name)s - %(message)s')
+    # add formatter to ch
+    ch.setFormatter(formatter)
+    # add ch to logger
+    logger.addHandler(ch)
 
-if args.verbose >= 3:
-    logger.setLevel(logging.DEBUG)
-    ch.setLevel(logging.DEBUG)
-elif args.verbose >= 2:
-    logger.setLevel(logging.INFO)
-    ch.setLevel(logging.INFO)
-else:
-    logger.setLevel(logging.WARNING)
-    ch.setLevel(logging.WARNING)
-
-try:
-    board = NotebooksBoard(args.location)
-except ValueError:
-    try:
-        notebook = Notebook(args.location)
-        board = None
-    except ValueError:
-        print(args.location, 'is neither a notebook nor a notebooks board.',
-              file=sys.stderr)
-
-if args.list:
-    if board is not None:
-        list_board(board)
+    if args.verbose >= 3:
+        logger.setLevel(logging.DEBUG)
+        ch.setLevel(logging.DEBUG)
+    elif args.verbose >= 2:
+        logger.setLevel(logging.INFO)
+        ch.setLevel(logging.INFO)
     else:
-        list_notebook(notebook)
-elif board is not None:
-    convert_board(board, args.verbose)
-else:
-    convert_notebook(notebook, args.verbose)
+        logger.setLevel(logging.WARNING)
+        ch.setLevel(logging.WARNING)
+
+    try:
+        board = NotebooksBoard(args.location)
+    except ValueError:
+        try:
+            notebook = Notebook(args.location)
+            board = None
+        except ValueError:
+            print(args.location, 'is neither a notebook nor a notebooks board.',
+                  file=sys.stderr)
+
+    if args.list:
+        if board is not None:
+            list_board(board)
+        else:
+            list_notebook(notebook)
+    elif board is not None:
+        convert_board(board, args.verbose)
+    else:
+        convert_notebook(notebook, args.verbose)
+
+
+if __name__ == '__main__':
+    main()
